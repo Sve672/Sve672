@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>Memo – Assistente personale</title>
+  <meta name="theme-color" content="#4f46e5">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Memo">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <button id="btn-memory" class="icon-btn" aria-label="Memoria" title="Cosa ricordo di te">🧠<span id="mem-count" class="badge">0</span></button>
+    <h1>Memo</h1>
+    <div class="top-actions">
+      <button id="btn-new" class="icon-btn" aria-label="Nuova conversazione" title="Nuova conversazione">✚</button>
+      <button id="btn-settings" class="icon-btn" aria-label="Impostazioni" title="Impostazioni">⚙︎</button>
+    </div>
+  </header>
+
+  <main id="chat" aria-live="polite"></main>
+
+  <form id="composer" autocomplete="off">
+    <button type="button" id="btn-mic" class="icon-btn round" aria-label="Parla" title="Parla">🎤</button>
+    <textarea id="input" rows="1" placeholder="Scrivimi qualcosa…" enterkeyhint="send"></textarea>
+    <button type="submit" id="btn-send" class="icon-btn round primary" aria-label="Invia">➤</button>
+  </form>
+
+  <!-- Pannello memoria -->
+  <dialog id="dlg-memory">
+    <div class="sheet">
+      <div class="sheet-head">
+        <h2>Cosa ricordo di te</h2>
+        <button class="icon-btn" data-close aria-label="Chiudi">✕</button>
+      </div>
+      <p class="hint">Imparo da quello che mi racconti. Puoi correggere o cancellare qualsiasi ricordo.</p>
+      <form id="mem-add" class="row">
+        <input id="mem-add-text" placeholder="Aggiungi un ricordo a mano…">
+        <button class="btn">Aggiungi</button>
+      </form>
+      <input id="mem-search" type="search" placeholder="Cerca nei ricordi…">
+      <ul id="mem-list"></ul>
+    </div>
+  </dialog>
+
+  <!-- Impostazioni -->
+  <dialog id="dlg-settings">
+    <form class="sheet" method="dialog" id="settings-form">
+      <div class="sheet-head">
+        <h2>Impostazioni</h2>
+        <button class="icon-btn" value="cancel" aria-label="Chiudi">✕</button>
+      </div>
+      <label>Chiave API Anthropic
+        <input id="set-key" type="password" placeholder="sk-ant-…" autocomplete="off">
+        <small>Resta solo su questo telefono. La crei su console.anthropic.com → API Keys.</small>
+      </label>
+      <label>Come ti chiami?
+        <input id="set-name" placeholder="Il tuo nome">
+      </label>
+      <label>Nome dell'assistente
+        <input id="set-botname" placeholder="Memo">
+      </label>
+      <label>Modello
+        <select id="set-model">
+          <option value="claude-opus-5-5">Claude Opus 5.5 (più intelligente)</option>
+          <option value="claude-sonnet-5-5">Claude Sonnet 5.5 (veloce)</option>
+          <option value="claude-haiku-5-5">Claude Haiku 5.5 (economico)</option>
+        </select>
+      </label>
+      <label class="check"><input id="set-tts" type="checkbox"> Leggi le risposte ad alta voce</label>
+      <div class="row wrap">
+        <button type="button" class="btn" id="btn-export">Esporta backup</button>
+        <button type="button" class="btn" id="btn-import">Importa backup</button>
+        <input type="file" id="file-import" accept="application/json" hidden>
+      </div>
+      <button type="button" class="btn danger" id="btn-wipe">Cancella tutto</button>
+      <div class="row end">
+        <button class="btn primary" value="save" id="btn-save">Salva</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
