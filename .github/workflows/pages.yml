@@ -1,7 +1,7 @@
 name: Pubblica l'app su GitHub Pages
 on:
   push:
-    branches: [main]
+    branches: [main, claude/virtual-assistant-memory-ole6z1]
   workflow_dispatch:
 permissions:
   contents: read

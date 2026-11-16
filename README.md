@@ -28,7 +28,7 @@ aggiungi un metodo di pagamento e vai su *API Keys → Create Key*. L'uso si pag
 
 L'app deve essere online su un indirizzo `https://`. Il modo più semplice e gratuito è GitHub Pages:
 
-1. Unisci questo branch in `main` del repository.
+1. Il workflow pubblica dal ramo `main` (o dal ramo `claude/virtual-assistant-memory-ole6z1`, se è quello principale).
 2. Su GitHub: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
 3. Dopo un minuto l'app sarà su `https://<tuo-utente>.github.io/<nome-repo>/`
    (il link compare anche in *Actions* e in *Settings → Pages*).
