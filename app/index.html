@@ -55,7 +55,18 @@
         <h2>Impostazioni</h2>
         <button class="icon-btn" value="cancel" aria-label="Chiudi">✕</button>
       </div>
-      <label>Chiave API Anthropic
+      <label>Servizio di intelligenza artificiale
+        <select id="set-provider">
+          <option value="gemini">Google Gemini – gratis</option>
+          <option value="claude">Claude di Anthropic – a pagamento</option>
+        </select>
+      </label>
+      <label data-provider="gemini">Chiave API Gemini
+        <input id="set-gemini-key" type="password" placeholder="AIza…" autocomplete="off">
+        <small>Gratis, senza carta di credito: aistudio.google.com/apikey → «Create API key». Resta solo su questo telefono.
+        Nota: con il piano gratuito Google può usare le conversazioni per migliorare i suoi servizi.</small>
+      </label>
+      <label data-provider="claude">Chiave API Anthropic
         <input id="set-key" type="password" placeholder="sk-ant-…" autocomplete="off">
         <small>Resta solo su questo telefono. La crei su console.anthropic.com → API Keys.</small>
       </label>
@@ -65,7 +76,7 @@
       <label>Nome dell'assistente
         <input id="set-botname" placeholder="Memo">
       </label>
-      <label>Modello
+      <label data-provider="claude">Modello
         <select id="set-model">
           <option value="claude-opus-5-5">Claude Opus 5.5 (più intelligente)</option>
           <option value="claude-sonnet-5-5">Claude Sonnet 5.5 (veloce)</option>

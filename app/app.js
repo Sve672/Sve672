@@ -28,8 +28,12 @@ const save = (k, v) => {
   }
 };
 
-const DEFAULT_SETTINGS = { apiKey: "", name: "", botName: "Memo", model: "claude-opus-5-5", tts: false };
-let settings = { ...DEFAULT_SETTINGS, ...load(KEYS.settings, {}) };
+const DEFAULT_SETTINGS = { provider: "gemini", apiKey: "", geminiKey: "", name: "", botName: "Memo", model: "claude-opus-5-5", tts: false };
+const storedSettings = load(KEYS.settings, {});
+let settings = { ...DEFAULT_SETTINGS, ...storedSettings };
+// Chi aveva già inserito una chiave Claude prima dell'arrivo di Gemini resta su Claude.
+if (!storedSettings.provider && storedSettings.apiKey) settings.provider = "claude";
+const activeKey = () => (settings.provider === "gemini" ? settings.geminiKey : settings.apiKey);
 let memories = load(KEYS.memories, []);
 let session = load(KEYS.session, null);
 
@@ -160,6 +164,7 @@ function runTool(name, input) {
 // ---------------------------------------------------------------------------
 function newSession() {
   session = {
+    provider: settings.provider,
     startedAt: new Date().toISOString(),
     system: memorySnapshot(),
     api: [], // messaggi in formato API
@@ -169,7 +174,8 @@ function newSession() {
   persistSession();
 }
 function ensureSession() {
-  if (!session || session.api.length >= MAX_SESSION_MESSAGES) {
+  // Le cronologie di Claude e Gemini hanno formati diversi: cambiando servizio si riparte (i ricordi restano).
+  if (!session || session.api.length >= MAX_SESSION_MESSAGES || (session.provider || "claude") !== settings.provider) {
     const hadOne = !!session;
     newSession();
     if (hadOne) session.view.push({ type: "divider", text: "Nuova conversazione – i ricordi restano" });
@@ -189,7 +195,7 @@ let busy = false;
 
 async function send(text) {
   if (busy || !text.trim()) return;
-  if (!settings.apiKey) {
+  if (!activeKey()) {
     openSettings();
     showError("Inserisci prima la tua chiave API nelle impostazioni.");
     return;
@@ -200,78 +206,47 @@ async function send(text) {
 
   const rollback = session.api.length;
   const viewRollback = session.view.length;
-  session.api.push({ role: "user", content: `[${fmtDate()}]\n${text}` });
-  if (session.pendingNotes.length) {
-    session.api.push({
-      role: "system",
-      content: "Nel frattempo l'utente ha modificato a mano i tuoi ricordi:\n" + session.pendingNotes.map((n) => "- " + n).join("\n"),
-    });
+  const stamped = `[${fmtDate()}]\n${text}`;
+  const notes = session.pendingNotes.length
+    ? "Nel frattempo l'utente ha modificato a mano i tuoi ricordi:\n" + session.pendingNotes.map((n) => "- " + n).join("\n")
+    : "";
+  if (settings.provider === "gemini") {
+    const parts = [{ text: stamped }];
+    if (notes) parts.push({ text: "[Nota di sistema] " + notes });
+    session.api.push({ role: "user", parts });
+  } else {
+    session.api.push({ role: "user", content: stamped });
+    if (notes) session.api.push({ role: "system", content: notes });
   }
   session.view.push({ type: "user", text });
   renderChat();
 
-  const client = new Anthropic({ apiKey: settings.apiKey, dangerouslyAllowBrowser: true });
-  const model = settings.model || DEFAULT_SETTINGS.model;
   const bubble = addBubble("bot", "");
   bubble.classList.add("typing");
-  let spoken = "";
+  const ui = {
+    append(delta) {
+      bubble.dataset.raw = (bubble.dataset.raw || "") + delta;
+      bubble.innerHTML = renderMarkdown(bubble.dataset.raw);
+      scrollDown();
+    },
+    note(text) {
+      session.view.push({ type: "note", text });
+      chatEl.insertBefore(makeNote(text), bubble);
+    },
+    paragraph() {
+      if (bubble.dataset.raw && !bubble.dataset.raw.endsWith("\n\n")) bubble.dataset.raw += "\n\n";
+    },
+  };
 
   try {
-    for (let turn = 0; turn < 8; turn++) {
-      const params = {
-        model,
-        max_tokens: 16000,
-        system: [
-          { type: "text", text: baseInstructions() },
-          { type: "text", text: session.system },
-        ],
-        tools: TOOLS,
-        messages: session.api,
-        output_config: { effort: "medium" },
-        cache_control: { type: "ephemeral" },
-      };
-      // Se un filtro di sicurezza rifiuta per errore, il server ripete la richiesta su un altro modello.
-      if (model !== "claude-haiku-5-5") {
-        params.betas = ["server-side-fallback-2026-07-01"];
-        params.fallbacks = "default";
-      }
-      const stream = client.beta.messages.stream(params);
-      stream.on("text", (delta) => {
-        spoken += delta;
-        bubble.dataset.raw = (bubble.dataset.raw || "") + delta;
-        bubble.innerHTML = renderMarkdown(bubble.dataset.raw);
-        scrollDown();
-      });
-      const msg = await stream.finalMessage();
-
-      if (msg.stop_reason === "refusal") {
-        throw new Error("Non posso rispondere a questa richiesta.");
-      }
-      session.api.push({ role: "assistant", content: msg.content });
-
-      if (msg.stop_reason !== "tool_use") break;
-      const results = [];
-      for (const block of msg.content) {
-        if (block.type !== "tool_use") continue;
-        const r = runTool(block.name, block.input);
-        results.push({ type: "tool_result", tool_use_id: block.id, content: r.content, ...(r.isError ? { is_error: true } : {}) });
-        if (r.note) {
-          session.view.push({ type: "note", text: r.note });
-          chatEl.insertBefore(makeNote(r.note), bubble);
-        }
-      }
-      session.api.push({ role: "user", content: results });
-      if (bubble.dataset.raw) {
-        bubble.dataset.raw += "\n\n";
-        spoken += " ";
-      }
-    }
+    if (settings.provider === "gemini") await geminiLoop(ui);
+    else await claudeLoop(ui);
     session.pendingNotes = [];
     const finalText = (bubble.dataset.raw || "").trim();
     if (finalText) session.view.push({ type: "bot", text: finalText });
     persistSession();
     renderChat();
-    if (settings.tts && spoken.trim()) speak(spoken);
+    if (settings.tts && finalText) speak(finalText);
   } catch (err) {
     console.error(err);
     session.api.length = rollback;
@@ -286,7 +261,141 @@ async function send(text) {
   }
 }
 
+// Esegue gli strumenti richiesti e restituisce i risultati, mostrando le note di memoria.
+function runTools(calls, ui) {
+  return calls.map(({ name, input }) => {
+    const r = runTool(name, input);
+    if (r.note) ui.note(r.note);
+    return r;
+  });
+}
+
+// --- Claude (a pagamento) ---------------------------------------------------
+async function claudeLoop(ui) {
+  const client = new Anthropic({ apiKey: settings.apiKey, dangerouslyAllowBrowser: true });
+  const model = settings.model || DEFAULT_SETTINGS.model;
+  for (let turn = 0; turn < 8; turn++) {
+    const params = {
+      model,
+      max_tokens: 16000,
+      system: [
+        { type: "text", text: baseInstructions() },
+        { type: "text", text: session.system },
+      ],
+      tools: TOOLS,
+      messages: session.api,
+      output_config: { effort: "medium" },
+      cache_control: { type: "ephemeral" },
+    };
+    // Se un filtro di sicurezza rifiuta per errore, il server ripete la richiesta su un altro modello.
+    if (model !== "claude-haiku-5-5") {
+      params.betas = ["server-side-fallback-2026-07-01"];
+      params.fallbacks = "default";
+    }
+    const stream = client.beta.messages.stream(params);
+    stream.on("text", (delta) => ui.append(delta));
+    const msg = await stream.finalMessage();
+    if (msg.stop_reason === "refusal") throw new Error("Non posso rispondere a questa richiesta.");
+    session.api.push({ role: "assistant", content: msg.content });
+    if (msg.stop_reason !== "tool_use") return;
+
+    const uses = msg.content.filter((b) => b.type === "tool_use");
+    const results = runTools(uses, ui).map((r, i) => ({
+      type: "tool_result",
+      tool_use_id: uses[i].id,
+      content: r.content,
+      ...(r.isError ? { is_error: true } : {}),
+    }));
+    session.api.push({ role: "user", content: results });
+    ui.paragraph();
+  }
+}
+
+// --- Google Gemini (piano gratuito) -----------------------------------------
+// Se il modello principale ha esaurito la quota gratuita si prova il successivo.
+const GEMINI_MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest"];
+
+class GeminiError extends Error {
+  constructor(status, message, reason) {
+    super(message);
+    this.status = status;
+    this.reason = reason;
+  }
+}
+
+async function geminiRequest(body) {
+  let lastErr;
+  for (const model of GEMINI_MODELS) {
+    let res;
+    try {
+      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": settings.geminiKey },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      throw new GeminiError(0, "Nessuna connessione a internet.");
+    }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) return data;
+    const reason = data.error?.details?.find((d) => d.reason)?.reason || data.error?.status;
+    lastErr = new GeminiError(res.status, data.error?.message || res.statusText, reason);
+    if (![404, 429, 500, 503].includes(res.status)) break;
+  }
+  throw lastErr;
+}
+
+async function geminiLoop(ui) {
+  const tools = [
+    {
+      functionDeclarations: TOOLS.map((t) => ({ name: t.name, description: t.description, parametersJsonSchema: t.input_schema })),
+    },
+  ];
+  for (let turn = 0; turn < 8; turn++) {
+    const data = await geminiRequest({
+      systemInstruction: { parts: [{ text: baseInstructions() + "\n\n" + session.system }] },
+      contents: session.api,
+      tools,
+    });
+    const cand = data.candidates?.[0];
+    if (!cand?.content?.parts?.length) {
+      if (data.promptFeedback?.blockReason || ["SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"].includes(cand?.finishReason)) {
+        throw new Error("Non posso rispondere a questa richiesta.");
+      }
+      if (turn === 0) throw new Error("Risposta vuota da Gemini, riprova.");
+      return;
+    }
+    // Le parti vanno rimandate così come sono (contengono le firme del ragionamento).
+    const content = { role: "model", parts: cand.content.parts };
+    session.api.push(content);
+    const text = content.parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("");
+    if (text) ui.append(text);
+
+    const calls = content.parts.filter((p) => p.functionCall).map((p) => p.functionCall);
+    if (!calls.length) return;
+    const results = runTools(calls.map((c) => ({ name: c.name, input: c.args || {} })), ui);
+    session.api.push({
+      role: "user",
+      parts: results.map((r, i) => ({
+        functionResponse: {
+          name: calls[i].name,
+          ...(calls[i].id ? { id: calls[i].id } : {}),
+          response: r.isError ? { error: r.content } : { result: r.content },
+        },
+      })),
+    });
+    ui.paragraph();
+  }
+}
+
 function explainError(err) {
+  if (err instanceof GeminiError) {
+    if (err.reason === "API_KEY_INVALID" || err.status === 401) return "Chiave Gemini non valida. Controllala nelle impostazioni.";
+    if (err.status === 403) return "La chiave Gemini non è autorizzata. Creane una nuova su aistudio.google.com.";
+    if (err.status === 429) return "Hai raggiunto il limite gratuito di Gemini per ora. Riprova tra qualche minuto (o domani).";
+    if (err.status >= 500) return "Gemini è momentaneamente sovraccarico. Riprova.";
+    return err.message || "Errore di Gemini.";
+  }
   if (err instanceof Anthropic.AuthenticationError) return "Chiave API non valida. Controllala nelle impostazioni.";
   if (err instanceof Anthropic.PermissionDeniedError) return "La chiave API non ha accesso a questo modello.";
   if (err instanceof Anthropic.RateLimitError) return "Troppe richieste: riprova tra qualche secondo.";
@@ -522,7 +631,15 @@ $("#mem-add").addEventListener("submit", (e) => {
 // Impostazioni, backup
 // ---------------------------------------------------------------------------
 const dlgSet = $("#dlg-settings");
+function syncProviderFields() {
+  const g = $("#set-provider").value === "gemini";
+  document.querySelectorAll("[data-provider]").forEach((el) => (el.hidden = el.dataset.provider !== (g ? "gemini" : "claude")));
+}
+$("#set-provider").addEventListener("change", syncProviderFields);
 function openSettings() {
+  $("#set-provider").value = settings.provider;
+  $("#set-gemini-key").value = settings.geminiKey;
+  syncProviderFields();
   $("#set-key").value = settings.apiKey;
   $("#set-name").value = settings.name;
   $("#set-botname").value = settings.botName;
@@ -534,6 +651,8 @@ $("#btn-settings").addEventListener("click", openSettings);
 dlgSet.addEventListener("close", () => {
   if (dlgSet.returnValue !== "save") return;
   settings = {
+    provider: $("#set-provider").value,
+    geminiKey: $("#set-gemini-key").value.trim(),
     apiKey: $("#set-key").value.trim(),
     name: $("#set-name").value.trim(),
     botName: $("#set-botname").value.trim() || "Memo",
@@ -597,7 +716,7 @@ document.title = settings.botName || "Memo";
 $("h1").textContent = settings.botName || "Memo";
 renderMemCount();
 renderChat();
-if (!settings.apiKey) openSettings();
+if (!activeKey()) openSettings();
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js").catch((e) => console.warn("SW", e));
 }

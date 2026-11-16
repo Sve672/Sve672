@@ -2,7 +2,8 @@
 
 App per il telefono (Android e iPhone) che fa da assistente virtuale: ci parli scrivendo o a voce,
 e **impara e ricorda** quello che gli racconti di te, conversazione dopo conversazione.
-Il "cervello" è Claude di Anthropic.
+Il "cervello" può essere **Google Gemini (gratis)** oppure **Claude di Anthropic (a pagamento)**:
+si sceglie nelle impostazioni.
 
 ## Cosa sa fare
 
@@ -14,15 +15,23 @@ Il "cervello" è Claude di Anthropic.
   cancellarlo o aggiungere ricordi a mano.
 - **Voce** – 🎤 per dettare (italiano) e, nelle impostazioni, lettura ad alta voce delle risposte.
 - **Privacy** – ricordi, conversazioni e chiave API restano **solo sul tuo telefono**
-  (memoria del browser). Nessun server intermedio: il telefono parla direttamente con l'API di Anthropic.
+  (memoria del browser). Nessun server intermedio: il telefono parla direttamente con Google o Anthropic.
 - **Backup** – esporta/importa un file JSON con tutti i ricordi (utile se cambi telefono).
 - Funziona come una vera app: si installa sulla schermata home e si apre a schermo intero.
 
 ## Cosa ti serve
 
-Una **chiave API di Anthropic**: crea un account su <https://console.anthropic.com>,
-aggiungi un metodo di pagamento e vai su *API Keys → Create Key*. L'uso si paga a consumo
-(una chiacchierata normale costa pochi centesimi; con *Claude Haiku 5.5* nelle impostazioni costa molto meno).
+Una chiave API, a scelta:
+
+- **Gratis – Google Gemini**: vai su <https://aistudio.google.com/apikey>, accedi con il tuo
+  account Google e premi *Create API key*. Non serve la carta di credito. Il piano gratuito ha un limite
+  di messaggi (al minuto e al giorno) più che sufficiente per uso personale; se lo superi, basta aspettare.
+  Attenzione: con il piano gratuito Google può usare le conversazioni per migliorare i suoi servizi.
+- **A pagamento – Claude**: crea un account su <https://console.anthropic.com>, aggiungi un metodo
+  di pagamento e vai su *API Keys → Create Key*. Si paga a consumo (con *Claude Haiku 5.5* meno di
+  0,1 centesimi a messaggio). Le conversazioni non vengono usate per addestrare i modelli.
+
+Puoi cambiare servizio quando vuoi: i ricordi restano, riparte solo la conversazione in corso.
 
 ## Come metterla sul telefono
 
@@ -35,7 +44,7 @@ L'app deve essere online su un indirizzo `https://`. Il modo più semplice e gra
 4. Apri il link sul telefono:
    - **Android (Chrome)**: menu ⋮ → *Installa app* / *Aggiungi a schermata Home*.
    - **iPhone (Safari)**: tasto Condividi → *Aggiungi alla schermata Home*.
-5. Apri l'app, inserisci la chiave API e il tuo nome nelle impostazioni ⚙︎, e inizia a parlare.
+5. Apri l'app, nelle impostazioni ⚙︎ scegli il servizio, inserisci la chiave e il tuo nome, e inizia a parlare.
 
 > ⚠️ La chiave API è salvata nel telefono: chi ha accesso al telefono sbloccato può usarla.
 > Puoi impostare un limite di spesa mensile nella console di Anthropic, e revocare la chiave in qualsiasi momento.
@@ -50,8 +59,8 @@ cd app && python3 -m http.server 8080
 ## Come funziona la memoria (per i curiosi)
 
 - I ricordi sono una lista di frasi brevi con categoria e data, salvate nel `localStorage`.
-- All'inizio di ogni conversazione vengono passati a Claude nel prompt di sistema.
-- Claude ha tre strumenti: `ricorda`, `aggiorna_ricordo`, `dimentica`, che l'app esegue sul telefono.
+- All'inizio di ogni conversazione vengono passati all'intelligenza artificiale (Gemini o Claude).
+- Ha tre strumenti: `ricorda`, `aggiorna_ricordo`, `dimentica`, che l'app esegue sul telefono.
 - Le conversazioni lunghe ripartono automaticamente (o con ✚): i ricordi restano, quindi
   l'assistente continua a conoscerti.
 
