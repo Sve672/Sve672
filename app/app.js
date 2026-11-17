@@ -272,7 +272,7 @@ function runTools(calls, ui) {
 
 // --- Claude (a pagamento) ---------------------------------------------------
 async function claudeLoop(ui) {
-  const client = new Anthropic({ apiKey: settings.apiKey, dangerouslyAllowBrowser: true });
+  const client = new Anthropic({ apiKey: settings.apiKey, dangerouslyAllowBrowser: true, timeout: 90_000, maxRetries: 1 });
   const model = settings.model || DEFAULT_SETTINGS.model;
   for (let turn = 0; turn < 8; turn++) {
     const params = {
@@ -314,6 +314,10 @@ async function claudeLoop(ui) {
 // --- Google Gemini (piano gratuito) -----------------------------------------
 // Se il modello principale ha esaurito la quota gratuita si prova il successivo.
 const GEMINI_MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest"];
+// Se la rete non manda nulla per tutto questo tempo, la richiesta viene annullata.
+const IDLE_TIMEOUT_MS = 30000;
+// Ragionamento breve = risposte molto più rapide. Se il modello non lo supporta, si riprova senza.
+let geminiThinking = load("memo.geminiThinking", true);
 
 class GeminiError extends Error {
   constructor(status, message, reason) {
@@ -323,24 +327,113 @@ class GeminiError extends Error {
   }
 }
 
-async function geminiRequest(body) {
+// Una richiesta in streaming: il testo viene mostrato man mano che arriva.
+async function geminiStreamOnce(model, body, onText) {
+  const ctrl = new AbortController();
+  let timer;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ctrl.abort(), IDLE_TIMEOUT_MS);
+  };
+  arm();
+  let res;
+  try {
+    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": settings.geminiKey },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    throw new GeminiError(0, ctrl.signal.aborted ? "timeout" : "offline");
+  }
+  if (!res.ok) {
+    clearTimeout(timer);
+    const data = await res.json().catch(() => ({}));
+    const err = Array.isArray(data) ? data[0]?.error : data.error;
+    const reason = err?.details?.find((d) => d.reason)?.reason || err?.status;
+    throw new GeminiError(res.status, err?.message || res.statusText, reason);
+  }
+
+  const parts = [];
+  let finishReason, blockReason, started = false;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  const handle = (line) => {
+    if (!line.startsWith("data:")) return;
+    const chunk = JSON.parse(line.slice(5).trim());
+    if (chunk.promptFeedback?.blockReason) blockReason = chunk.promptFeedback.blockReason;
+    const cand = chunk.candidates?.[0];
+    if (!cand) return;
+    if (cand.finishReason) finishReason = cand.finishReason;
+    for (const part of cand.content?.parts || []) {
+      parts.push(part);
+      if (part.text && !part.thought) {
+        started = true;
+        onText(part.text);
+      }
+    }
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      arm();
+      buf += decoder.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (line) handle(line);
+      }
+    }
+    if (buf.trim()) handle(buf.trim());
+  } catch (e) {
+    if (e instanceof SyntaxError) throw new GeminiError(0, "Risposta non valida da Gemini, riprova.");
+    // Interruzione a metà: se qualcosa è già arrivato lo teniamo.
+    if (!started) throw new GeminiError(0, ctrl.signal.aborted ? "timeout" : "offline");
+  } finally {
+    clearTimeout(timer);
+  }
+  return { parts: mergeTextParts(parts), finishReason, blockReason };
+}
+
+// Lo streaming spezza il testo in tanti pezzi: li riuniamo per tenere la cronologia compatta.
+function mergeTextParts(parts) {
+  const out = [];
+  for (const p of parts) {
+    const last = out[out.length - 1];
+    const plain = (x) => x && typeof x.text === "string" && Object.keys(x).every((k) => k === "text" || k === "thought");
+    if (plain(p) && plain(last) && !!p.thought === !!last.thought) last.text += p.text;
+    else out.push({ ...p });
+  }
+  return out;
+}
+
+async function geminiRequest(body, onText) {
   let lastErr;
   for (const model of GEMINI_MODELS) {
-    let res;
-    try {
-      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": settings.geminiKey },
-        body: JSON.stringify(body),
-      });
-    } catch {
-      throw new GeminiError(0, "Nessuna connessione a internet.");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const b = geminiThinking ? { ...body, generationConfig: { thinkingConfig: { thinkingLevel: "LOW" } } } : body;
+      try {
+        return await geminiStreamOnce(model, b, onText);
+      } catch (err) {
+        lastErr = err;
+        // Il modello non accetta l'impostazione del ragionamento: si riprova subito senza.
+        if (err.status === 400 && geminiThinking && /thinking/i.test(err.message)) {
+          geminiThinking = false;
+          save("memo.geminiThinking", false);
+          attempt--;
+          continue;
+        }
+        // Rete lenta o interrotta, o servizio sovraccarico: un nuovo tentativo.
+        if ((err.status === 0 || err.status >= 500) && attempt === 0) continue;
+        break;
+      }
     }
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) return data;
-    const reason = data.error?.details?.find((d) => d.reason)?.reason || data.error?.status;
-    lastErr = new GeminiError(res.status, data.error?.message || res.statusText, reason);
-    if (![404, 429, 500, 503].includes(res.status)) break;
+    if (![404, 429, 500, 503].includes(lastErr.status)) break;
   }
   throw lastErr;
 }
@@ -351,40 +444,56 @@ async function geminiLoop(ui) {
       functionDeclarations: TOOLS.map((t) => ({ name: t.name, description: t.description, parametersJsonSchema: t.input_schema })),
     },
   ];
+  let wroteText = false;
+  let nudged = false;
   for (let turn = 0; turn < 8; turn++) {
-    const data = await geminiRequest({
-      systemInstruction: { parts: [{ text: baseInstructions() + "\n\n" + session.system }] },
-      contents: session.api,
-      tools,
-    });
-    const cand = data.candidates?.[0];
-    if (!cand?.content?.parts?.length) {
-      if (data.promptFeedback?.blockReason || ["SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"].includes(cand?.finishReason)) {
+    const r = await geminiRequest(
+      {
+        systemInstruction: { parts: [{ text: baseInstructions() + "\n\n" + session.system }] },
+        contents: session.api,
+        tools,
+      },
+      (t) => {
+        wroteText = true;
+        ui.append(t);
+      }
+    );
+    if (!r.parts.length) {
+      if (r.blockReason || ["SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII"].includes(r.finishReason)) {
         throw new Error("Non posso rispondere a questa richiesta.");
       }
       if (turn === 0) throw new Error("Risposta vuota da Gemini, riprova.");
-      return;
+    } else {
+      // Le parti vanno rimandate così come sono (contengono le firme del ragionamento).
+      session.api.push({ role: "model", parts: r.parts });
     }
-    // Le parti vanno rimandate così come sono (contengono le firme del ragionamento).
-    const content = { role: "model", parts: cand.content.parts };
-    session.api.push(content);
-    const text = content.parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("");
-    if (text) ui.append(text);
 
-    const calls = content.parts.filter((p) => p.functionCall).map((p) => p.functionCall);
-    if (!calls.length) return;
-    const results = runTools(calls.map((c) => ({ name: c.name, input: c.args || {} })), ui);
-    session.api.push({
-      role: "user",
-      parts: results.map((r, i) => ({
-        functionResponse: {
-          name: calls[i].name,
-          ...(calls[i].id ? { id: calls[i].id } : {}),
-          response: r.isError ? { error: r.content } : { result: r.content },
-        },
-      })),
-    });
-    ui.paragraph();
+    const calls = r.parts.filter((p) => p.functionCall).map((p) => p.functionCall);
+    if (calls.length) {
+      const results = runTools(calls.map((c) => ({ name: c.name, input: c.args || {} })), ui);
+      session.api.push({
+        role: "user",
+        parts: results.map((res, i) => ({
+          functionResponse: {
+            name: calls[i].name,
+            ...(calls[i].id ? { id: calls[i].id } : {}),
+            response: res.isError ? { error: res.content } : { result: res.content },
+          },
+        })),
+      });
+      ui.paragraph();
+      continue;
+    }
+    // A volte, dopo aver salvato un ricordo, Gemini non scrive nulla: gli chiediamo di rispondere.
+    if (!wroteText && !nudged) {
+      nudged = true;
+      const nudge = { text: "[Nota di sistema] Ora rispondi all'utente." };
+      const last = session.api[session.api.length - 1];
+      if (last.role === "user") last.parts.push(nudge);
+      else session.api.push({ role: "user", parts: [nudge] });
+      continue;
+    }
+    return;
   }
 }
 
@@ -393,6 +502,8 @@ function explainError(err) {
     if (err.reason === "API_KEY_INVALID" || err.status === 401) return "Chiave Gemini non valida. Controllala nelle impostazioni.";
     if (err.status === 403) return "La chiave Gemini non è autorizzata. Creane una nuova su aistudio.google.com.";
     if (err.status === 429) return "Hai raggiunto il limite gratuito di Gemini per ora. Riprova tra qualche minuto (o domani).";
+    if (err.status === 0 && err.message === "timeout") return "La rete è troppo lenta e la risposta non arriva. Riprova (il messaggio è ancora nella casella).";
+    if (err.status === 0 && err.message === "offline") return "Nessuna connessione a internet. Riprova quando sei online.";
     if (err.status >= 500) return "Gemini è momentaneamente sovraccarico. Riprova.";
     return err.message || "Errore di Gemini.";
   }

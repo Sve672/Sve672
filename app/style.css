@@ -78,6 +78,8 @@ body {
 .msg.user { align-self: flex-end; background: var(--user); color: var(--user-text); border-bottom-right-radius: 6px; }
 .msg.bot { align-self: flex-start; background: var(--bot); border: 1px solid var(--border); border-bottom-left-radius: 6px; }
 .msg.bot.typing::after { content: "▍"; animation: pulse 1s infinite; }
+.msg.bot.typing:empty { color: var(--muted); }
+.msg.bot.typing:empty::after { content: "Sto pensando •••"; animation: pulse 1.2s infinite; }
 .msg.error { align-self: center; background: transparent; color: var(--danger); font-size: 14px; text-align: center; }
 .note {
   align-self: flex-start;

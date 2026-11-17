@@ -1,6 +1,6 @@
 // Service worker: rende l'app installabile e apribile anche offline.
 // Le chiamate a api.anthropic.com non vengono mai messe in cache.
-const CACHE = "memo-v2";
+const CACHE = "memo-v3";
 const SHELL = ["./", "index.html", "style.css", "app.js", "vendor/anthropic.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {
